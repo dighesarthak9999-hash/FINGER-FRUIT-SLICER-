@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Hand Blade</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js" crossorigin="anonymous"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #0a0a0a;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            color: white;
+            touch-action: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        canvas { display: block; }
+        #video-container {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 140px;
+            height: 105px;
+            border: 2px solid #4ade80;
+            border-radius: 12px;
+            overflow: hidden;
+            transform: scaleX(-1);
+            background: #000;
+            z-index: 50;
+            opacity: 0.8;
+        }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        .glass {
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        #loading-screen {
+            position: absolute;
+            inset: 0;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .loader {
+            border: 3px solid #333;
+            border-top: 3px solid #4ade80;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 200;
+            display: none;
+        }
+
+        /* Custom Scrollbar for collection */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body>
+
+    <div id="loading-screen">
+        <div class="loader mb-4"></div>
+        <p id="status-text" class="text-green-400 font-mono text-sm tracking-widest uppercase">Initializing Hand Tracking...</p>
+    </div>
+
+    <!-- UI Overlay -->
+    <div id="ui-layer" class="absolute inset-0 pointer-events-none p-4 z-40">
+        <div class="flex justify-between items-start">
+            <div class="space-y-2">
+                <div class="glass p-3 rounded-xl flex items-center gap-4">
+                    <div>
+                        <div class="text-[10px] uppercase opacity-50 font-bold">Score</div>
+                        <div id="score-val" class="text-3xl font-black text-white">0</div>
+                    </div>
+                    <div class="border-l border-white/10 pl-4">
+                        <div class="text-[10px] uppercase opacity-50 font-bold">Best</div>
+                        <div id="high-score-val" class="text-xl font-bold text-yellow-400">0</div>
+                    </div>
+                </div>
+                <div id="streak-container" class="glass px-3 py-1 rounded-full inline-block opacity-0 transition-opacity">
+                    <span class="text-xs font-bold text-orange-400">STREAK x</span><span id="streak-val" class="text-sm font-black">1</span>
+                </div>
+            </div>
+            
+            <div class="flex flex-col items-end gap-2">
+                <div class="glass p-3 rounded-xl">
+                    <div class="text-[10px] uppercase opacity-50 font-bold mb-1 text-right">Lives</div>
+                    <div id="lives-container" class="flex gap-1 text-xl"></div>
+                </div>
+                <button id="pause-btn" class="pointer-events-auto glass p-3 rounded-xl hover:bg-white/10 transition-colors">
+                    <svg id="pause-icon" class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="video-container">
+        <video id="webcam" autoplay playsinline muted></video>
+    </div>
+
+    <!-- Modals -->
+    <div id="menu-modal" class="modal glass p-6 rounded-3xl w-[95%] max-w-lg text-center block max-h-[90vh] overflow-y-auto no-scrollbar">
+        <h1 class="text-5xl font-black mb-1 italic tracking-tighter text-white">HAND BLADE</h1>
+        <p class="text-green-400 mb-6 text-xs uppercase tracking-widest font-bold">The Ultimate Hand Tracking Slicer</p>
+        
+        <!-- Collection Stats -->
+        <div class="grid grid-cols-3 gap-2 mb-8" id="fruit-stats-grid">
+            <!-- Dynamically filled -->
+        </div>
+
+        <div class="space-y-3">
+            <button onclick="startGame(1)" class="w-full bg-green-500 hover:bg-green-400 text-black font-black py-4 rounded-2xl transition-transform active:scale-95 shadow-lg shadow-green-500/20">
+                1 HAND MODE
+            </button>
+            <button onclick="startGame(2)" class="w-full border-2 border-green-500 text-green-500 hover:bg-green-500/10 font-black py-4 rounded-2xl transition-transform active:scale-95">
+                2 HANDS MODE
+            </button>
+        </div>
+    </div>
+
+    <div id="game-over-modal" class="modal glass p-8 rounded-3xl w-[90%] max-w-md text-center">
+        <h2 id="death-reason" class="text-red-500 font-black text-xl mb-1 uppercase">GAME OVER</h2>
+        <div class="text-6xl font-black mb-2" id="final-score">0</div>
+        <p class="text-gray-400 mb-8" id="new-high-score-msg"></p>
+        <button onclick="showMenu()" class="w-full bg-white text-black font-black py-4 rounded-2xl transition-transform active:scale-95">
+            MAIN MENU
+        </button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script type="module">
+    import { HandLandmarker, FilesetResolver } from "https://cdn.skypack.dev/@mediapipe/tasks-vision@0.10.3";
+
+    // Audio System
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playSound(type) {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        if (type === 'slice') {
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.1);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+        } else if (type === 'bomb') {
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+            osc.frequency.linearRampToValueAtTime(20, audioCtx.currentTime + 0.5);
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.5);
+        } else if (type === 'miss') {
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(100, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+        }
+    }
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const video = document.getElementById('webcam');
+    const highscoreEl = document.getElementById('high-score-val');
+    const scoreEl = document.getElementById('score-val');
+    const livesEl = document.getElementById('lives-container');
+    const streakEl = document.getElementById('streak-val');
+    const streakContainer = document.getElementById('streak-container');
+    const statsGrid = document.getElementById('fruit-stats-grid');
+
+    // Configuration
+    let config = {
+        numPlayers: 1,
+        maxLives: 3,
+        baseGravity: 0.15,
+        baseSpawnRate: 1800
+    };
+
+    // State
+    let state = {
+        score: 0,
+        highscore: localStorage.getItem('handblade_highscore') || 0,
+        collection: JSON.parse(localStorage.getItem('handblade_collection') || '{}'),
+        lives: 3,
+        streak: 0,
+        gameActive: false,
+        paused: false,
+        players: [{ x: 0, y: 0, px: 0, py: 0, active: false }, { x: 0, y: 0, px: 0, py: 0, active: false }],
+        fruits: [],
+        particles: [],
+        lastSpawn: 0,
+        difficulty: 1.0
+    };
+
+    const FRUIT_TYPES = [
+        { id: 'apple', emoji: '🍎', color: '#ff4d4d', points: 10 },
+        { id: 'orange', emoji: '🍊', color: '#ffa500', points: 12 },
+        { id: 'watermelon', emoji: '🍉', color: '#2ecc71', points: 15 },
+        { id: 'pineapple', emoji: '🍍', color: '#f1c40f', points: 20 },
+        { id: 'strawberry', emoji: '🍓', color: '#e74c3c', points: 10 },
+        { id: 'kiwi', emoji: '🥝', color: '#a2d149', points: 15 },
+        { id: 'bomb', emoji: '💣', color: '#ff0000', isBomb: true }
+    ];
+
+    function updateCollectionUI() {
+        statsGrid.innerHTML = FRUIT_TYPES.map(f => {
+            const count = state.collection[f.id] || 0;
+            return `
+                <div class="bg-white/5 border border-white/10 rounded-xl p-2 flex flex-col items-center">
+                    <span class="text-2xl mb-1">${f.emoji}</span>
+                    <span class="text-[10px] text-gray-500 uppercase font-bold">${f.isBomb ? 'Avoid' : f.points + ' pts'}</span>
+                    <span class="text-xs font-black text-green-400 mt-1">${count}</span>
+                </div>
+            `;
+        }).join('');
+    }
+
+    highscoreEl.innerText = state.highscore;
+    updateCollectionUI();
+
+    let handLandmarker;
+    let lastVideoTime = -1;
+
+    async function init() {
+        const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
+        handLandmarker = await HandLandmarker.createFromOptions(vision, {
+            baseOptions: {
+                modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                delegate: "GPU"
+            },
+            runningMode: "VIDEO",
+            numHands: 2
+        });
+
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+            document.getElementById('loading-screen').style.display = 'none';
+            requestAnimationFrame(loop);
+        };
+    }
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    class Fruit {
+        constructor() {
+            this.type = FRUIT_TYPES[Math.floor(Math.random() * FRUIT_TYPES.length)];
+            this.x = Math.random() * (canvas.width - 100) + 50;
+            this.y = canvas.height + 60;
+            this.radius = Math.min(canvas.width, canvas.height) * 0.07;
+            this.vx = (Math.random() - 0.5) * (canvas.width * 0.01) * state.difficulty;
+            this.vy = -(Math.random() * 5 + (canvas.height * 0.018)) * Math.sqrt(state.difficulty);
+            this.gravity = config.baseGravity * state.difficulty;
+            this.angle = 0;
+            this.rv = (Math.random() - 0.5) * 0.2;
+            this.isSliced = false;
+        }
+
+        update() {
+            if (state.paused) return true;
+            this.vy += this.gravity;
+            this.x += this.vx;
+            this.y += this.vy;
+            this.angle += this.rv;
+
+            if (this.y > canvas.height + 100) {
+                if (!this.isSliced && !this.type.isBomb) onMiss();
+                return false;
+            }
+            return true;
+        }
+
+        draw() {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.angle);
+            const size = this.radius * 1.5;
+            ctx.font = `${size}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            if (this.isSliced) {
+                ctx.globalAlpha = 0.4;
+                ctx.fillText(this.type.emoji, -size/4, 0);
+                ctx.fillText(this.type.emoji, size/4, 0);
+            } else {
+                ctx.fillText(this.type.emoji, 0, 0);
+            }
+            ctx.restore();
+        }
+    }
+
+    class Particle {
+        constructor(x, y, color) {
+            this.x = x; this.y = y; this.color = color;
+            this.vx = (Math.random() - 0.5) * 15;
+            this.vy = (Math.random() - 0.5) * 15;
+            this.life = 1.0;
+        }
+        update() {
+            if (state.paused) return true;
+            this.x += this.vx; this.y += this.vy;
+            this.life -= 0.03;
+            return this.life > 0;
+        }
+        draw() {
+            ctx.globalAlpha = this.life;
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    window.startGame = (players) => {
+        config.numPlayers = players;
+        state.score = 0;
+        state.lives = config.maxLives;
+        state.streak = 0;
+        state.difficulty = 1.0;
+        state.fruits = [];
+        state.particles = [];
+        state.gameActive = true;
+        state.paused = false;
+        state.players.forEach(p => p.active = false);
+        
+        document.getElementById('menu-modal').style.display = 'none';
+        document.getElementById('game-over-modal').style.display = 'none';
+        updateUI();
+    };
+
+    window.showMenu = () => {
+        state.gameActive = false;
+        document.getElementById('game-over-modal').style.display = 'none';
+        document.getElementById('menu-modal').style.display = 'block';
+        updateCollectionUI();
+    };
+
+    function onMiss() {
+        state.lives--;
+        state.streak = 0;
+        playSound('miss');
+        updateUI();
+        if (state.lives <= 0) die("OUT OF LIVES");
+    }
+
+    function die(reason) {
+        state.gameActive = false;
+        playSound('bomb');
+        const isNewHigh = state.score > state.highscore;
+        if (isNewHigh) {
+            state.highscore = state.score;
+            localStorage.setItem('handblade_highscore', state.highscore);
+            highscoreEl.innerText = state.highscore;
+        }
+        
+        localStorage.setItem('handblade_collection', JSON.stringify(state.collection));
+
+        document.getElementById('death-reason').innerText = reason;
+        document.getElementById('final-score').innerText = state.score;
+        document.getElementById('new-high-score-msg').innerText = isNewHigh ? "NEW RECORD!" : `Best: ${state.highscore}`;
+        document.getElementById('game-over-modal').style.display = 'block';
+    }
+
+    function updateUI() {
+        scoreEl.innerText = state.score;
+        livesEl.innerHTML = Array(config.maxLives).fill(0).map((_, i) => 
+            `<span class="${i < state.lives ? 'text-red-500' : 'text-white/10'}">❤</span>`
+        ).join('');
+        if (state.streak > 1) {
+            streakContainer.style.opacity = '1';
+            streakEl.innerText = state.streak;
+        } else {
+            streakContainer.style.opacity = '0';
+        }
+    }
+
+    document.getElementById('pause-btn').onclick = () => {
+        if (!state.gameActive) return;
+        state.paused = !state.paused;
+        document.getElementById('pause-icon').innerHTML = state.paused 
+            ? '<path d="M8 5v14l11-7z"/>' 
+            : '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
+    };
+
+    function checkCollisions() {
+        for (let f of state.fruits) {
+            if (f.isSliced) continue;
+            for (let i = 0; i < config.numPlayers; i++) {
+                const p = state.players[i];
+                if (!p.active) continue;
+                const d = Math.hypot(f.x - p.x, f.y - p.y);
+                if (d < f.radius + 35) {
+                    if (f.type.isBomb) {
+                        state.collection['bomb'] = (state.collection['bomb'] || 0) + 1;
+                        die("KABOOM!");
+                    } else {
+                        f.isSliced = true;
+                        state.streak++;
+                        state.score += f.type.points * (1 + Math.floor(state.streak / 5));
+                        state.difficulty += 0.004;
+                        
+                        state.collection[f.type.id] = (state.collection[f.type.id] || 0) + 1;
+
+                        playSound('slice');
+                        updateUI();
+                        for (let j = 0; j < 10; j++) state.particles.push(new Particle(f.x, f.y, f.type.color));
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    function loop(time) {
+        if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+            lastVideoTime = video.currentTime;
+            const results = handLandmarker.detectForVideo(video, time);
+            
+            state.players.forEach(p => p.active = false);
+
+            if (results.landmarks) {
+                results.landmarks.forEach((hand, i) => {
+                    if (i >= config.numPlayers) return;
+                    const indexFinger = hand[8];
+                    state.players[i].active = true;
+                    state.players[i].px = state.players[i].x;
+                    state.players[i].py = state.players[i].y;
+                    state.players[i].x = (1 - indexFinger.x) * canvas.width;
+                    state.players[i].y = indexFinger.y * canvas.height;
+                });
+                if (state.gameActive && !state.paused) checkCollisions();
+            }
+        }
+
+        ctx.fillStyle = '#0a0a0a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        if (state.gameActive) {
+            for (let i = 0; i < config.numPlayers; i++) {
+                const p = state.players[i];
+                if (!p.active) continue;
+                ctx.beginPath();
+                ctx.strokeStyle = i === 0 ? '#4ade80' : '#60a5fa';
+                ctx.lineWidth = 15;
+                ctx.lineCap = 'round';
+                ctx.globalAlpha = 0.6;
+                ctx.moveTo(p.px || p.x, p.py || p.y);
+                ctx.lineTo(p.x, p.y);
+                ctx.stroke();
+                ctx.globalAlpha = 1.0;
+                ctx.fillStyle = i === 0 ? '#4ade80' : '#60a5fa';
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        if (state.gameActive && !state.paused) {
+            const spawnRate = (1800) / Math.sqrt(state.difficulty);
+            if (time - state.lastSpawn > spawnRate) {
+                state.fruits.push(new Fruit());
+                state.lastSpawn = time;
+            }
+        }
+
+        state.fruits = state.fruits.filter(f => {
+            const active = f.update();
+            f.draw();
+            return active;
+        });
+
+        state.particles = state.particles.filter(p => {
+            const active = p.update();
+            p.draw();
+            return active;
+        });
+
+        requestAnimationFrame(loop);
+    }
+
+    init();
+</script>
+</body>
+</html>
